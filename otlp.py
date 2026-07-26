@@ -51,6 +51,8 @@ class TraceBuilder:
         self.approval_span_id = None
         # actionId -> execute_tool span id (for join linking / approval linking)
         self.action_spans = {}
+        # (actionId, callId) -> span dict, for idempotent tool-call span updates
+        self.tool_call_spans = {}
 
     def _base_attrs(self):
         return [_attr("ga5.run.id", self.run_id), _attr("ga5.public.marker", self.public_marker)]
@@ -129,41 +131,58 @@ class TraceBuilder:
     def add_tool_call_span(self, action_id, call_id, tool_name, attempt,
                             http_status=None, error_type=None, receipt_id=None,
                             receipt_nonce=None):
-        parent = self.action_spans.get(action_id, self.agent_span_id)
-        span_id = new_span_id()
-        attrs = self._base_attrs() + [
-            _attr("gen_ai.tool.call.id", call_id),
-            _attr("ga5.action.id", action_id),
-            _attr("ga5.attempt", attempt),
-            _attr("http.request.method", "POST"),
-            _attr("http.request.resend_count", max(attempt - 1, 0)),
-        ]
-        if receipt_id:
-            attrs.append(_attr("ga5.receipt.id", receipt_id))
-        if receipt_nonce:
-            attrs.append(_attr("ga5.receipt.nonce", receipt_nonce))
+        """Idempotent per (action_id, call_id): the first call (at dispatch
+        time) creates the span in a pending/UNSET state. A later call with
+        the same action_id/call_id (when the outcome arrives) UPDATES that
+        same span in place rather than creating a second one - each physical
+        attempt gets exactly one CLIENT span."""
+        key = (action_id, call_id)
 
-        status = {"code": STATUS_UNSET}
+        existing = self.tool_call_spans.get(key)
+        if existing is None:
+            parent = self.action_spans.get(action_id, self.agent_span_id)
+            span_id = new_span_id()
+            span = {
+                "traceId": self.trace_id,
+                "spanId": span_id,
+                "parentSpanId": parent,
+                "name": f"POST tool/{tool_name}",
+                "kind": KIND_CLIENT,
+                "startTimeUnixNano": str(_now_ns()),
+                "endTimeUnixNano": str(_now_ns()),
+                "attributes": self._base_attrs() + [
+                    _attr("gen_ai.tool.call.id", call_id),
+                    _attr("ga5.action.id", action_id),
+                    _attr("ga5.attempt", attempt),
+                    _attr("http.request.method", "POST"),
+                    _attr("http.request.resend_count", max(attempt - 1, 0)),
+                ],
+                "status": {"code": STATUS_UNSET},
+            }
+            self.tool_call_spans[key] = span
+            self.spans.append(span)
+        else:
+            span = existing
+
+        # Update end time on every touch (dispatch -> outcome).
+        span["endTimeUnixNano"] = str(_now_ns())
+
+        existing_keys = {a["key"] for a in span["attributes"]}
+        if receipt_id and "ga5.receipt.id" not in existing_keys:
+            span["attributes"].append(_attr("ga5.receipt.id", receipt_id))
+        if receipt_nonce and "ga5.receipt.nonce" not in existing_keys:
+            span["attributes"].append(_attr("ga5.receipt.nonce", receipt_nonce))
+
         if error_type == "timeout":
-            status = {"code": STATUS_ERROR, "message": "timeout"}
-            attrs.append(_attr("error.type", "timeout"))
+            span["status"] = {"code": STATUS_ERROR, "message": "timeout"}
+            if "error.type" not in existing_keys:
+                span["attributes"].append(_attr("error.type", "timeout"))
         elif http_status == 503:
-            status = {"code": STATUS_ERROR}
+            span["status"] = {"code": STATUS_ERROR}
         elif http_status == 200:
-            status = {"code": STATUS_UNSET}
+            span["status"] = {"code": STATUS_UNSET}
 
-        self.spans.append({
-            "traceId": self.trace_id,
-            "spanId": span_id,
-            "parentSpanId": parent,
-            "name": f"POST tool/{tool_name}",
-            "kind": KIND_CLIENT,
-            "startTimeUnixNano": str(_now_ns()),
-            "endTimeUnixNano": str(_now_ns()),
-            "attributes": attrs,
-            "status": status,
-        })
-        return span_id
+        return span["spanId"]
 
     def add_join_span(self, diagnostic_action_ids):
         span_id = new_span_id()
@@ -226,6 +245,15 @@ class TraceBuilder:
         tb.join_span_id = data.get("join_span_id")
         tb.approval_span_id = data.get("approval_span_id")
         tb.action_spans = data.get("action_spans", {})
+        # tool_call_spans was stored as key -> spanId; rehydrate as references
+        # to the actual span dict objects in tb.spans (not copies), so future
+        # in-place updates are reflected in the exported trace.
+        spans_by_id = {s["spanId"]: s for s in tb.spans}
+        tb.tool_call_spans = {}
+        for k, span_id in data.get("tool_call_spans", {}).items():
+            span_obj = spans_by_id.get(span_id)
+            if span_obj is not None:
+                tb.tool_call_spans[tuple(k.split("|", 1))] = span_obj
         return tb
 
     def to_stored(self):
@@ -241,4 +269,5 @@ class TraceBuilder:
             "join_span_id": self.join_span_id,
             "approval_span_id": self.approval_span_id,
             "action_spans": self.action_spans,
+            "tool_call_spans": {f"{k[0]}|{k[1]}": v["spanId"] for k, v in self.tool_call_spans.items()},
         }

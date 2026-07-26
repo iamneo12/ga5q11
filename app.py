@@ -142,7 +142,7 @@ def dispatch_effect(state: dict, tb: TraceBuilder):
     action_id = state["effect_action_id"]
     call_id = action_id
     tb.add_execute_tool_span(action_id, effect["toolName"])
-    tb.add_tool_call_span(action_id, call_id, effect["toolName"], attempt=1)
+    call_span_id = tb.add_tool_call_span(action_id, call_id, effect["toolName"], attempt=1)
     dispatch = {
         "actionId": action_id,
         "callId": call_id,
@@ -150,7 +150,7 @@ def dispatch_effect(state: dict, tb: TraceBuilder):
         "toolName": effect["toolName"],
         "arguments": effect["arguments"],
         "attempt": 1,
-        "traceparent": f"00-{tb.trace_id}-{tb.action_spans[action_id]}-01",
+        "traceparent": f"00-{tb.trace_id}-{call_span_id}-01",
     }
     if state.get("pending_approval") and state["pending_approval"]["actionId"] == action_id:
         dispatch["approvalId"] = state["pending_approval"]["approvalId"]
@@ -217,7 +217,7 @@ async def create_incident(request: Request):
         call_id = action_id
         diag_action_ids.append(action_id)
         tb.add_execute_tool_span(action_id, diag["toolName"])
-        tb.add_tool_call_span(action_id, call_id, diag["toolName"], attempt=1)
+        call_span_id = tb.add_tool_call_span(action_id, call_id, diag["toolName"], attempt=1)
         dispatch = {
             "actionId": action_id,
             "callId": call_id,
@@ -226,7 +226,7 @@ async def create_incident(request: Request):
             "arguments": diag["arguments"],
             "evidence": diag["evidence"],
             "attempt": 1,
-            "traceparent": f"00-{trace_id}-{tb.action_spans[action_id]}-01",
+            "traceparent": f"00-{trace_id}-{call_span_id}-01",
         }
         action_log.append(dispatch)
         diagnostic_actions[action_id] = {
@@ -315,13 +315,14 @@ async def post_receipts(run_id: str, request: Request):
             new_attempt = attempt + 1
             tb.add_tool_call_span(action_id, call_id, record["toolName"], attempt,
                                    http_status=503, receipt_id=receipt_id, receipt_nonce=nonce)
+            retry_span_id = tb.add_tool_call_span(action_id, new_call_id, record["toolName"], new_attempt)
             record["callId"] = new_call_id
             record["attempt"] = new_attempt
             record["status"] = "pending"
             retry_dispatch = {
                 "actionId": action_id, "callId": new_call_id, "phase": "diagnostic" if action_id in state["diagnostic_actions"] else "effect",
                 "toolName": record["toolName"], "attempt": new_attempt,
-                "traceparent": f"00-{tb.trace_id}-{tb.action_spans[action_id]}-{new_attempt:02d}",
+                "traceparent": f"00-{tb.trace_id}-{retry_span_id}-{new_attempt:02d}",
             }
             state["action_log"].append(retry_dispatch)
             state["pending_dispatches"].append(retry_dispatch)
