@@ -15,7 +15,6 @@ always-on free instance so you don't eat cold-start latency against the
 18s per-request budget).
 """
 import json
-import traceback
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 
@@ -25,21 +24,6 @@ from otlp import TraceBuilder
 from util import request_hash, sorted_json_digest, new_hex_id, new_trace_id
 
 app = FastAPI()
-
-
-# TEMPORARY DEBUG HANDLER - remove before grading. Surfaces the real
-# traceback in the HTTP response instead of a bare "Internal Server Error",
-# so you can see failures directly in curl output.
-@app.exception_handler(Exception)
-async def debug_exception_handler(request: Request, exc: Exception):
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": str(exc),
-            "type": type(exc).__name__,
-            "traceback": traceback.format_exc(),
-        },
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +101,12 @@ def maybe_advance_to_effect(state: dict, tb: TraceBuilder):
         state["status"] = "failed"
         return
 
-    effect = state["plan"]["effect"]
+    effect = state["plan"].get("effect")
+    if not effect:
+        state["effect_stage"] = "no_effect"
+        state["status"] = "completed"
+        return
+
     tool_name = effect["toolName"]
     policy = state["policy"]
     action_id = state["effect_action_id"]
