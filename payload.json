@@ -1,0 +1,25 @@
+{
+  "profile": "ga5-incident-agent/v2",
+  "runId": "test-run-5",
+  "agentName": "incident-response",
+  "publicMarker": "safe telemetry marker",
+  "incident": {
+    "incidentId": "inc1",
+    "title": "checkout service latency spike",
+    "service": "checkout",
+    "severity": "SEV-1",
+    "transcript": "[ev_1] p99 latency rose to 4200ms at 03:12 UTC. [ev_2] error rate steady at 0.1%. [ev_3] deploy of checkout v42 completed at 03:10 UTC. [ev_4] downstream payment-gateway healthy.",
+    "allowedRootCauses": ["bad_deploy", "downstream_outage", "resource_exhaustion"]
+  },
+  "toolCatalog": [
+    {"name": "query_metrics", "description": "fetch latency/error metrics for a service", "inputSchema": {"service": "string", "window": "string"}},
+    {"name": "check_deploy_history", "description": "list recent deploys for a service", "inputSchema": {"service": "string"}},
+    {"name": "rollback_deployment", "description": "roll back to the previous deploy", "inputSchema": {"service": "string"}}
+  ],
+  "policy": {
+    "maximumDiagnostics": 3,
+    "effectTools": ["rollback_deployment"],
+    "approvalRequiredFor": ["rollback_deployment"],
+    "doNotExport": ["transcript"]
+  }
+}
