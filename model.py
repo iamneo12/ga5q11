@@ -41,23 +41,24 @@ shape:
  "effect":{"toolName":"...","arguments":{...}}}
 
 Incident:
-{incident_json}
+__INCIDENT_JSON__
 
 Tool catalog:
-{catalog_json}
+__CATALOG_JSON__
 
 Policy:
-{policy_json}
+__POLICY_JSON__
 """
 
 
 def plan_incident(incident: dict, tool_catalog: list, policy: dict) -> dict:
     """Makes the one and only model call for this run. Returns the parsed
     plan dict. Raises ValueError on unparseable output."""
-    prompt = PLAN_PROMPT.format(
-        incident_json=json.dumps(incident),
-        catalog_json=json.dumps(tool_catalog),
-        policy_json=json.dumps(policy),
+    prompt = (
+        PLAN_PROMPT
+        .replace("__INCIDENT_JSON__", json.dumps(incident))
+        .replace("__CATALOG_JSON__", json.dumps(tool_catalog))
+        .replace("__POLICY_JSON__", json.dumps(policy))
     )
 
     response = _client.models.generate_content(model=MODEL_NAME, contents=prompt)
