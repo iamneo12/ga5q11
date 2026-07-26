@@ -4,9 +4,9 @@ Uses Google Gemini's free tier. Set GEMINI_API_KEY in your environment.
 """
 import os
 import json
-import google.generativeai as genai
+from google import genai
 
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
+_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
 
 MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
@@ -60,8 +60,7 @@ def plan_incident(incident: dict, tool_catalog: list, policy: dict) -> dict:
         policy_json=json.dumps(policy),
     )
 
-    model = genai.GenerativeModel(MODEL_NAME)
-    response = model.generate_content(prompt)
+    response = _client.models.generate_content(model=MODEL_NAME, contents=prompt)
     text = response.text.strip()
 
     # Strip accidental markdown fences if the model adds them anyway.
